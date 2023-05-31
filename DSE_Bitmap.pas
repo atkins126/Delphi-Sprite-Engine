@@ -49,6 +49,7 @@ type
     fRowLen: integer;
     BlendMode: SE_BlendMode;
     constructor Create(); overload;
+    constructor Create(aWidth, aHeight: integer; aColor:Tcolor); overload;
     constructor Create(aWidth, aHeight: integer); overload;
     constructor Create(const FileName: string); overload;
     constructor Create(image: SE_Bitmap); overload;
@@ -197,6 +198,14 @@ begin
   Allocate(aWidth, aHeight);
 end;
 
+constructor SE_Bitmap.Create(aWidth, aHeight: integer; aColor: TColor);
+begin
+  Create();
+  Allocate(aWidth, aHeight);
+  Bitmap.Canvas.Brush.Color := aColor;
+  Bitmap.Canvas.Brush.Style := bsSolid;
+  Bitmap.Canvas.FillRect(rect(0,0,bitmap.Width,bitmap.Height));
+end;
 constructor SE_Bitmap.Create(const FileName: string);
 begin
   Create();
@@ -870,7 +879,7 @@ begin
 
      aTRGB:= DSE_Misc.TColor2TRGB (wtrans);
 
-    SrcX:=0;
+    SrcX:=0;  // arbitrario
     SrcY:=0;
    // DstX:= DrawingRect.Left ;
    // DstY:= DrawingRect.Top;
@@ -1379,8 +1388,7 @@ begin
           getmem(sxarr, (cx2 - cx1 + 1) * sizeof(integer));
           psx := sxarr;
 
-          for x := cx1 to cx2 do
-          begin
+          for x := cx1 to cx2 do begin
             psx^ := ilimit(trunc( zx*(x-xDst) + xSrc ), 0, fWidth-1);
             inc(psx);
           end;
@@ -1388,8 +1396,7 @@ begin
           getmem(syarr, (cy2 - cy1 + 1) * sizeof(integer));
           psy := syarr;
 
-          for y := cy1 to cy2 do
-          begin
+          for y := cy1 to cy2 do begin
             psy^ := ilimit(trunc( zy*(y-yDst) + ySrc ), 0, fHeight-1);
             inc(psy);
           end;

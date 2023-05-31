@@ -1,22 +1,23 @@
 unit DSE_theater;
 //{$Define nagscreen}
-{$Define Angle}
 interface
-
 uses
   Windows, Messages, vcl.Graphics, vcl.Controls, vcl.Forms, system.Classes, system.SysUtils, vcl.StdCtrls, vcl.ExtCtrls, strutils,DSE_list,
   DSE_Bitmap, DSE_ThreadTimer, DSE_Misc, DSE_defs,  Generics.Collections ,Generics.Defaults, dse_pathplanner;
 
-  const dt_XCenter = 5;
-  const dt_XRight = 7;
+  const dt_XCenter = 120;
+  const dt_XRight = 121;
 
   Type TGridStyle = (gsNone,gsHex);
   Type TRenderBitmap = ( VirtualRender, VisibleRender );
+  type TSpriteMoveMode = ( Normal, Path, Thrust);
 type
   SE_Theater = class;
   SE_Engine =  class;
   SE_Sprite = class;
   SE_SpriteProgressBar = class;
+  SE_SpritePolygon = class;
+
 
   SE_TheaterEvent = procedure( Sender: TObject; VirtualBitmap, VisibleBitmap: SE_Bitmap ) of object;
   TCollisionEvent = procedure( Sender: TObject; Sprite1, Sprite2: SE_Sprite ) of object;
@@ -43,6 +44,7 @@ type
   protected
   public
     lBmp: SE_Bitmap;
+    lPriority : Integer;
     lTransparent: boolean;
     lX : Integer;
     lY : Integer;
@@ -51,8 +53,8 @@ type
     stag: string;
     LifeSpan: Integer;
     dead: Boolean;
-  constructor create (bmpFilename,Guid:string; x,y: integer;  visible,Transparent: boolean);overload;
-  constructor create (bmp:SE_Bitmap; Guid:string;x,y: integer; visible,Transparent: boolean);overload;
+  constructor create (bmpFilename,Guid:string; x,y: integer;  visible,Transparent: boolean; priority,alifespan: integer);overload;
+  constructor create (bmp:SE_Bitmap; Guid:string;x,y: integer; visible,Transparent: boolean; priority,alifespan: integer);overload;
   destructor Destroy;override;
   end;
 
@@ -106,8 +108,8 @@ type
     VirtualSource1x, VirtualSource1y, VirtualSourceWidth, VirtualSourceHeight: integer;
     fDstX, fDstY: integer;
 
-    fVirtualWidth: integer;
-    fVirtualheight: integer;
+    fVirtualWidth, fVirtualheight: integer;
+    fWrapHorizontal, fWrapVertical: Boolean;
 
     FActive: boolean;
 
@@ -160,6 +162,8 @@ type
     procedure SetCellHeight (const v: integer);
     procedure SetHexSmallWidth (const v: integer);
 
+    procedure SetWrapHorizontal(const v: boolean);
+    procedure SetWrapVertical(const v: boolean);
     procedure SetVirtualWidth(const v: integer);
     procedure SetVirtualHeight(const v: integer);
     procedure SetViewX(v: integer);
@@ -329,6 +333,9 @@ type
     property OnTheaterMouseDown: SE_TheaterMouseEvent read FOnTheaterMouseDown write FOnTheaterMouseDown;
     property OnTheaterMouseUp: SE_TheaterMouseEvent read FOnTheaterMouseUp write FOnTheaterMouseUp;
 
+    property WrapHorizontal: boolean read fWrapHorizontal write SetWrapHorizontal;
+    property WrapVertical: boolean read fWrapVertical write SetWrapVertical;
+
     property VirtualWidth: integer read fVirtualWidth write SetVirtualWidth;
     property Virtualheight: integer read fVirtualheight write SetVirtualheight;
     property Passive : boolean read fPassive write fpassive default False;
@@ -371,6 +378,7 @@ type
 
   SE_SpriteMoverData = class( TObject )
   private
+
     fStartX,fStartY: Integer;
     lstPartial : TStringList;
     FPartialList : String;
@@ -384,7 +392,7 @@ type
     FDestinationXreach: integer;
     FreachPerc: Integer;
 
-    fWPinterval: Integer;
+    fModeModePath_WPinterval: Integer;
 
     FDestinationCellY: integer;
     FDestinationCellX: integer;
@@ -404,16 +412,24 @@ type
   public
     FSprite: SE_Sprite;
 
-    TotalStep: Integer;
-    curWP: Integer;
-    TWPinterval: Integer;   // ms tra un movepathpoint e l'altro
-    MovePath: TList<TPoint>;
-    UseMovePath: boolean;
+    MoveMode : TSpriteMoveMode;
+
+    // Thrust
+    MoveModeThrust_Friction: single;
+    MoveModeThrust_MaximumSpeed: single;
+    MoveModeThrust_Thrust: Single;
+
+    // path
+    MoveModePath_TotalStep: Integer;
+    MoveModePath_CurWP: Integer;
+    MoveModePath_TWPinterval: Integer;   // ms tra un movepathpoint e l'altro
+    MoveModePath_MovePath: TList<TPoint>;
+
 
     constructor Create ; overload;
     destructor Destroy; override;
 
-    property WPinterval: Integer read fWPinterval write setWPinterval;   // ms tra un movepathpoint e l'altro
+    property MoveModePath_WPinterval: Integer read fModeModePath_WPinterval write setWPinterval;   // ms tra un movepathpoint e l'altro
 
     property Destination: Tpoint read GetDestination write SetDestination;
 
@@ -436,9 +452,6 @@ type
   SE_Engine = class( TComponent )
   private
     lstSprites: TObjectList<SE_Sprite>;
-    lstNewSprites: TObjectList<SE_Sprite>;
-
-
 
     FOnCollision: TCollisionEvent;
     FOnSpriteDestinationReached: SE_EngineEvent;
@@ -448,10 +461,10 @@ type
     FPixelClick: Boolean;
     FPixelCollision: Boolean;
     fHiddenSpritesMouseMove: Boolean;
+    fHiddenSpritesMouseClick: Boolean;
     FIsoPriority: Boolean;
     FPriority: integer;
     FClickSprites: boolean;
-    FSortNeeded: boolean;
     FrenderBitmap: TRenderBitmap;
 
     lstEngines: TObjectList<SE_Engine>;
@@ -489,8 +502,16 @@ type
     procedure AddSprite(aSprite: SE_Sprite) ;
     function CreateSpriteProgressBar(const Guid: string; posX, posY, Width,Height: integer; aFontName: string;
      aFontColor, aBarColor, aBackColor: TColor; aFontSize: Integer; aText: string; aValue: integer; aTransparent: boolean; aPriority: integer ): SE_SpriteProgressBar;
+    function CreateSpritePolygon(const Guid: string; posX, posY, VertexColor, FillColor: Integer; Vertices: string; Filled: Boolean; Priority: Integer): SE_SpritePolygon;
+    function CreateLblSprite(const aText:string; const Guid: string; posX, posY: integer;
+                             const FontName: string; const FontStyle :TFontStyles; const FontSize: Integer; const FontColor: TColor;
+                             const BackColor: TColor; const Alignment: Integer; BkMode: Integer; aTransColor: Integer; ForceTrans:boolean;
+                             const Transparent: boolean; const aPriority: integer  ): SE_Sprite;
 
-
+    function CreateLblTooltipSprite(const aText:string; const Guid: string; posX, posY: integer;
+                             const FontName: string; const FontStyle :TFontStyles; const FontSize: Integer; const FontColor: TColor;
+                             const BackColor: TColor; const Alignment: Integer; BkMode: Integer; aTransColor: Integer; ForceTrans:boolean;
+                             const Transparent: boolean; const aPriority: integer ; var R:TRect ): SE_Sprite;
     procedure Clear;
     procedure RemoveAllSprites; overload;
     procedure RemoveAllSprites ( Name:string ); overload;
@@ -510,6 +531,7 @@ type
     property PixelClick: boolean read FPixelClick write FPixelClick default false;
     property PixelCollision: boolean read FPixelCollision write FPixelCollision;
     property HiddenSpritesMouseMove: boolean read FHiddenSpritesMouseMove write FHiddenSpritesMouseMove;
+    property HiddenSpritesMouseClick: boolean read FHiddenSpritesMouseClick write FHiddenSpritesMouseClick;
     property IsoPriority: boolean read FIsoPriority write FIsoPriority;
     property Priority: integer read FPriority write SetPriority;
     property Theater: SE_Theater read FTheater write SetTheater;
@@ -528,6 +550,7 @@ type
   private
 
     ProgressBar : Boolean;
+    Polygon : Boolean;
     FBMP, FBMPalpha: SE_Bitmap;
     FBMPCurrentFrame,FBMPCurrentFrameAlpha: SE_Bitmap;
     fchangingFrame: boolean;
@@ -613,6 +636,7 @@ type
     function GetPosition: TPoint;
     procedure SetPosition(const Value: TPoint);
     procedure SetAngle(const Value: single);
+    function FixAngle(n: single): single;
     procedure SetFrameXmin (const Value: Integer);
     procedure SetFrameXmax (const Value: Integer);
 
@@ -628,6 +652,7 @@ type
     DestinationReached : boolean;
     DestinationReachedPerc : boolean;
 
+    iTag,iTag2,iTag3 : integer;
     sTag : string;
     CollisionIgnore: Boolean;
     MouseX, MouseY : integer; // coordinate del mouse attuali su questo SE_Sprite
@@ -654,10 +679,12 @@ type
     procedure Render(RenderTo: TRenderBitmap);  virtual;
 
     procedure SetPositionCell(const Value: TPoint);
-    
+
     function FindSubSprite ( Guid : string): SE_SubSprite;
-    procedure AddSubSprite ( const FileName, Guid: string; posX, posY: integer; const TransparentSprite: boolean);overload; virtual;
-    procedure AddSubSprite ( const bmp: SE_Bitmap; Guid: string; posX, posY: integer; const TransparentSprite: boolean);overload; virtual;
+    function AddSubSprite ( const FileName, Guid: string; posX, posY: integer; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite overload; virtual;
+    function AddSubSprite ( const bmp: SE_Bitmap; Guid: string; posX, posY: integer; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite overload; virtual;
+    function AddSubSpriteCentered ( const bmp: SE_Bitmap; Guid: string; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite overload; virtual;
+    function AddSubSpriteCentered ( const FileName, Guid: string; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite overload; virtual;
 
     procedure DeleteSubSprite ( Guid : string);
     procedure RemoveAllSubSprites;
@@ -739,7 +766,7 @@ type
   private
   protected
   public
-    Guid: string;
+//    Guid: string;
     Text : String;
     Value : Integer; // percentuale
     BarColor: TColor;
@@ -753,6 +780,22 @@ type
  // aggiorna il bmp interno ogni volta con fillrect
   constructor create ( const guid: string; x,y,w,h: integer; aFontName: string; aFontColor, aBarColor, aBackColor: TColor; aFontSize: Integer; aText: string; aValue: integer; aTransparent: boolean );
   destructor destroy; override;
+  end;
+
+  SE_SpritePolygon = class (SE_Sprite)
+  private
+    oldAngle: Single;
+    arPoint, arPointOriginal, arPointVisual : array of Tpoint;
+  function GetSizeFromPolygon: TRect;
+  protected
+  public
+    VertexColor : TColor;
+    FillColor : TColor;
+    Filled : Boolean;
+  constructor create ( const guid: string; x,y, VertexColor,FillColor: integer; Vertices: string; Filled: boolean; Priority: integer );
+  destructor destroy; override;
+  procedure Rotate(Degrees: integer);
+
   end;
 
   procedure GetLinePoints(X1, Y1, X2, Y2 : Integer; var PathPoints: dse_pathplanner.TPath); overload;
@@ -788,7 +831,10 @@ begin
 end;
 
 var
+  i: integer;
   MutexMove: cardinal;
+  arSin: array[0..360] of single;
+  arCos: array[0..360] of single;
 
 {$R-}
 // ----------------------------------------------------------------------------
@@ -1028,8 +1074,9 @@ destructor SE_SpriteLabel.Destroy;
 begin
   inherited;
 end;
-constructor SE_SubSprite.create (bmpFilename,Guid:string; x,y: integer; visible,Transparent: boolean);
+constructor SE_SubSprite.create (bmpFilename,Guid:string; x,y: integer; visible,Transparent: boolean; priority,alifespan: integer);
 begin
+    lPriority := priority;
     lTransparent:= Transparent;
     lX := x;
     lY := y;
@@ -1038,10 +1085,11 @@ begin
     lBmp:= SE_Bitmap.Create ( bmpFilename );
     self.guid := Guid;
     stag:= Guid;
-    LifeSpan := 0;
+    LifeSpan := aLifespan;
 end;
-constructor SE_SubSprite.create (bmp:SE_Bitmap;Guid:string; x,y: integer; visible,transparent: boolean);
+constructor SE_SubSprite.create (bmp:SE_Bitmap;Guid:string; x,y: integer; visible,transparent: boolean; priority,alifespan: integer);
 begin
+    lPriority := priority;
     lTransparent:= Transparent;
     lX := x;
     lY := y;
@@ -1050,7 +1098,7 @@ begin
     lBmp:= SE_Bitmap.Create ( bmp );
     self.guid := Guid;
     stag:= Guid;
-    LifeSpan := 0;
+    LifeSpan := aLifespan;
 end;
 destructor SE_SubSprite.Destroy;
 begin
@@ -1080,8 +1128,8 @@ begin
 end;
 procedure SE_SpriteMoverData.setWPinterval ( v: Integer );
 begin
-  fWPinterval := v;
-  tWPinterval := v;
+  fModeModePath_WPinterval := v;
+  MoveModePath_tWPinterval := v;
 end;
 procedure SE_SpriteMoverData.SetReachPerc(  perc: integer );
 var
@@ -1109,7 +1157,7 @@ begin
   WaitForSingleObject( MutexMove, INFINITE );
   aPath:= dse_pathplanner.TPath.Create;
   GetLinePoints( FSprite.Position.X,  FSprite.Position.Y, fDestinationX, fDestinationY, aPath) ;
-  TotalStep := aPath.Count;
+  MoveModePath_TotalStep := aPath.Count;
   ts := TStringList.Create;
   ts.CommaText := PartialCommaText;
 
@@ -1156,13 +1204,13 @@ begin
 end;
 constructor SE_SpriteMoverData.create ;
 begin
-  MovePath:= TList<TPoint>.Create ;
+  MoveModePath_MovePath:= TList<TPoint>.Create ;
   lstPartial:= TStringList.Create;
-  curWP := 0;
+  MoveModePath_curWP := 0;
 end;
 destructor SE_SpriteMoverData.Destroy ;
 begin
-  MovePath.Free;
+  MoveModePath_MovePath.Free;
   lstPartial.Free;
 end;
 
@@ -1575,7 +1623,7 @@ begin
   aSprite.Priority := aPriority;
  // if (posX >= 0) and (posY >=0) then aSprite.Position :=  Point(posX,posY);
 
-  lstNewSprites.Add( ASprite );
+  lstSprites.Add( ASprite );
   aSprite.Visible := true;
   Result:= aSprite;
 end;
@@ -1596,7 +1644,7 @@ begin
 
 //  if (posX >= 0) and (posY >=0) then aSprite.Position :=  Point(posX,posY);
 
-  lstNewSprites.Add( ASprite );
+  lstSprites.Add( ASprite );
   aSprite.Visible := true;
   Result:= aSprite;
 end;
@@ -1618,16 +1666,109 @@ begin
   aSpriteProgressBar.pbVAlignment := DT_VCENTER;
 //  if (posX >= 0) and (posY >=0) then aSprite.Position :=  Point(posX,posY);
 
-  lstNewSprites.Add( aSpriteProgressBar );
+  lstSprites.Add( aSpriteProgressBar );
   aSpriteProgressBar.Visible := true;
   aSpriteProgressBar.Transparent := False;
   Result:= aSpriteProgressBar;
 end;
+function SE_Engine.CreateSpritePolygon(const Guid: string; posX, posY, VertexColor, FillColor: Integer; Vertices: string; Filled: Boolean; Priority: Integer): SE_SpritePolygon;
+var
+aSpritePoly: SE_SpritePolygon;
+begin
+
+  aSpritePoly:= SE_SpritePolygon.Create ( Guid, posX, posY, VertexColor, FillColor, Vertices, Filled , Priority ) ;
+  aSpritePoly.Theater := FTheater;
+  aSpritePoly.FEngine := self;
+  aSpritePoly.OnDestinationreached := aSpritePoly.iOnDestinationReached ;// aSpriteReachdestination;
+  aSpritePoly.Guid := Guid;
+  aSpritePoly.Priority := Priority;
+
+  lstSprites.Add( aSpritePoly );
+  aSpritePoly.Visible := true;
+  aSpritePoly.Transparent := true;
+  Result:= aSpritePoly;
+
+end;
+function SE_Engine.CreateLblTooltipSprite(const aText:string; const Guid: string; posX, posY: integer;
+                             const FontName: string; const FontStyle :TFontStyles; const FontSize: Integer; const FontColor: TColor;
+                             const BackColor: TColor; const Alignment: integer; BkMode: Integer; aTransColor: Integer; ForceTrans:boolean;
+                             const Transparent: boolean; const aPriority: integer; var R:TRect  ): SE_Sprite;
+var
+    bmp: SE_Bitmap;
+    aSize: TSize;
+    h: Integer;
+begin
+
+  bmp:= SE_Bitmap.Create (R.Width,R.Height,BackColor);
+  Bmp.Bitmap.Canvas.Font.Name := FontName;
+  Bmp.Bitmap.Canvas.Font.Style := FontStyle;
+  Bmp.Bitmap.Canvas.Font.Size := FontSize;
+  Bmp.Bitmap.Canvas.Font.Color := FontColor;
+
+  SetBkMode(Bmp.Bitmap.Canvas.Handle, bkMode ); // 1= transparent ,2= OPAQUE
+  R.Left := 0;
+  R.Top := 0;
+  R.Width := Bmp.Width;
+  R.Right := Bmp.Width-1;
+  R.Height := Bmp.Height;
+  R.Bottom := Bmp.Height-1;
+
+  h:=DrawText(bmp.Canvas.handle, PChar(aText), length(aText), R, dt_wordbreak or Alignment or dt_vcenter or DT_CALCRECT);
+  DrawText(bmp.Canvas.handle, PChar(aText), length(aText), R, dt_wordbreak or Alignment or dt_vcenter);
+  bmp.Resize(R.Width,R.Height,BackColor);
+
+  Result := CreateSprite( Bmp.Bitmap, Guid,1,1,1000, posX, posY, Transparent, aPriority);
+  Result.TransparentColor := aTransColor;
+  Result.TransparentForced:= True;
+
+end;
+function SE_Engine.CreateLblSprite(const aText:string; const Guid: string; posX, posY: integer;
+                             const FontName: string; const FontStyle :TFontStyles; const FontSize: Integer; const FontColor: TColor;
+                             const BackColor: TColor; const Alignment: integer; BkMode: Integer; aTransColor: Integer; ForceTrans:boolean;
+                             const Transparent: boolean; const aPriority: integer  ): SE_Sprite;
+var
+  SeBmp : SE_bitmap;
+  aSize : TSize;
+  R: TRect;
+begin
+  SeBmp := SE_bitmap.Create ( 20,20,BackColor );
+  SeBmp.Bitmap.Canvas.Font.Name := FontName;
+  SeBmp.Bitmap.Canvas.Font.Style := FontStyle;
+  SeBmp.Bitmap.Canvas.Font.Size := FontSize;
+  SeBmp.Bitmap.Canvas.Font.Color := FontColor;
+  aSize := SeBmp.Bitmap.Canvas.TextExtent( aText );
+  SeBmp.Resize( aSize.Width, aSize.Height, BackColor );
+
+  SetBkMode(SeBmp.Bitmap.Canvas.Handle, bkMode ); // 1= transparent ,2= OPAQUE
+  R.Left := 0;
+  R.Top := 0;
+  R.Width := SeBmp.Width;
+  R.Right := SeBmp.Width-1;
+  R.Height := SeBmp.Height;
+  R.Bottom := SeBmp.Height-1;
+
+  if Alignment = dt_XCenter then begin // 5 è il mio centro speciale
+    R.Left := aSize.Width - (aSize.Width div 2);
+    R.Width := aSize.Width;
+    DrawText(SeBmp.Bitmap.Canvas.handle, PChar(aText), length(aText), R, dt_wordbreak or dt_Center  );
+  end
+  else if Alignment = dt_XRight then begin // 7 a X a destra
+    DrawText(SeBmp.Bitmap.Canvas.handle, PChar(aText), length(aText), R, dt_wordbreak or DT_RIGHT  );
+  end
+  else begin
+    DrawText(SeBmp.Bitmap.Canvas.handle, PChar(aText), length(aText), R, Alignment  );
+  end;
+
+  Result := CreateSprite( SeBmp.Bitmap, Guid,1,1,1000, posX, posY, Transparent, aPriority);
+  Result.TransparentColor := aTransColor;
+  Result.TransparentForced:= ForceTrans;
+end;
+
 procedure SE_Engine.AddSprite(aSprite: SE_Sprite) ;
 begin
   aSprite.Theater := FTheater;
   ASprite.FEngine := self;
-  lstNewSprites.Add( ASprite );
+  lstSprites.Add( ASprite );
   aSprite.Visible := true;
 end;
 
@@ -1819,7 +1960,6 @@ begin
   inherited Create( AOwner );
 
   lstSprites := TObjectList<SE_Sprite>.Create (true);
-  lstNewSprites := TObjectList<SE_Sprite>.Create (false);
 
   lstEngines := TObjectList<SE_Engine>.Create (false);   // link a quella del theater
   FClickSprites := true;
@@ -1831,7 +1971,6 @@ begin
   Clear;
  // if FTheater <> nil then
 //    FTheater.DetachSpriteEngine( self );
-  lstNewSprites.Free;
   lstSprites.free;
   lstEngines.Free;
   inherited Destroy;
@@ -1840,7 +1979,9 @@ end;
 
 procedure SE_Engine.RemoveSprite(ASprite: SE_Sprite);
 begin
-    ASprite.Dead := true;
+  ASprite.Dead := true;
+  ProcessSprites(0);
+
 end;
 
 
@@ -1904,26 +2045,16 @@ begin
         exit;
       end;
   end;
-  for i:= 0 to lstNewSprites.Count -1 do begin
-    if lstNewSprites [i].Guid  = Guid then
-      begin
-        result:=lstNewSprites [i];
-        exit;
-      end;
-  end;
 
 end;
 function SE_Engine.GetSprite(n: integer): SE_Sprite;
 begin
-  if n >= lstSprites.Count then
-    Result := lstNewSprites[n - lstSprites.Count]
-  else
-    Result :=  lstSprites[n] ;
+  Result :=  lstSprites[n] ;
 end;
 
 function SE_Engine.GetSpriteCount: integer;
 begin
-  Result := lstSprites.Count + lstNewSprites.Count;
+  Result := lstSprites.Count;
 end;
 
 procedure SE_Engine.Notification(AComponent: TComponent;
@@ -1948,36 +2079,19 @@ begin
     end;
 
   end;
-  (* i nuovi sprite vanno nella lista principale *)
-  while lstNewSprites.Count > 0 do  begin
-    nIndex := -1;
-    for i := 0 to lstSprites.Count - 1 do
-      if  lstNewSprites[0].Priority >=  lstSprites[i].Priority then
-      begin
-        nIndex := i;
-        Break;
-      end;
-    if nIndex = -1 then
-      lstSprites.Add( lstNewSprites[0] )
-    else
 
-      lstSprites.Insert( nIndex, lstNewSprites[0] );
-    lstNewSprites.Delete( 0 ); // <-- non libera l'oggetto, ha passato il puntatore
-  end;
-
-  if FSortNeeded then begin
    lstSprites.sort(TComparer<SE_Sprite>.Construct(
    function (const L, R: SE_Sprite): integer
     begin
         result := R.Priority  - L.Priority  ;
      end
     ));
-    FSortNeeded := false;
-  end;
 
   // Movimento Sprites
-  for i := 0 to lstSprites.Count - 1 do  begin
-     lstSprites[i].Move(interval);
+  if interval > 0 then begin
+    for i := 0 to lstSprites.Count - 1 do  begin
+       lstSprites[i].Move(interval);
+    end;
   end;
   // Rimuovo fli sprite morti (dead=true) dalla lista degli sprites
 //  lstDeadSprites.Clear ;
@@ -2052,6 +2166,8 @@ begin
   for i := lstSprites.Count - 1 downto 0 do
      if ContainsText ( Sprites[i].Guid, Name ) then
       RemoveSprite( Sprites[i] );
+
+  ProcessSprites(0);
 end;
 
 procedure SE_Engine.RemoveAllSprites;
@@ -2060,6 +2176,7 @@ var
 begin
   for i := lstSprites.Count - 1 downto 0 do
     RemoveSprite( Sprites[i] );
+  ProcessSprites(0);
 end;
 procedure SE_Engine.HideAllSprites;
 var
@@ -2140,8 +2257,6 @@ end;
 
 procedure SE_Engine.Clear;
 begin
-
-  lstNewSprites.Clear;
   lstSprites.Clear ;
 end;
 
@@ -2457,6 +2572,12 @@ function SE_Sprite.GetPositionY: single;
 begin
   Result := FPositionY;
 end;
+function SE_Sprite.FixAngle(n: single): single;
+begin
+  Result := n - 90;
+  if Result < 360 then
+    Result := Result + 360;
+end;
 
 
 procedure SE_Sprite.Move(interval: integer);
@@ -2464,8 +2585,8 @@ var
   temp: single;
   oldx, oldy: single;
   i,Dist,Dist2 : Integer;
+  VectorX, VectorY: single;
   label endMove;
-
 begin
   if LifeSpan > 0 then begin
     LifeSpan := LifeSpan - interval;
@@ -2478,19 +2599,19 @@ begin
   if AutoRotate then
   Angle := AngleOfLine ( position ,  MoverData.Destination );
 
-  if FMoverData.UseMovePath then begin
+  if FMoverData.MoveMode = Path then begin
 
-     if FMoverData.curWP >= FMoverData.MovePath.Count -1 then  begin
-       PositionX := FMoverData.MovePath[       FMoverData.MovePath.Count-1      ].X;
-       PositionY := FMoverData.MovePath[       FMoverData.MovePath.Count-1      ].Y;
-       FMoverData.UseMovePath := False;
-       FMoverData.curWP := 0;//FMoverData.MovePath.Count-1;
+     if FMoverData.MoveModePath_curWP >= FMoverData.MoveModePath_MovePath.Count -1 then  begin
+       PositionX := FMoverData.MoveModePath_MovePath[       FMoverData.MoveModePath_MovePath.Count-1      ].X;
+       PositionY := FMoverData.MoveModePath_MovePath[       FMoverData.MoveModePath_MovePath.Count-1      ].Y;
+       FMoverData.MoveMode := Normal;
+       FMoverData.MoveModePath_curWP := 0;//FMoverData.MovePath.Count-1;
        if NotifyDestinationReached  then
          if Assigned( FOnDestinationReached ) then FOnDestinationReached(  ); // <--- arriva su chi ha fatto l'override
 
 
        if NotifyDestinationReachedPerc  then begin
-         if (FMoverData.curWP * 100) div ( FMoverData.MovePath.Count -1 ) >= FMoverData.reachPerc then begin
+         if (FMoverData.MoveModePath_curWP * 100) div ( FMoverData.MoveModePath_MovePath.Count -1 ) >= FMoverData.reachPerc then begin
           if Assigned(FOnDestinationReachedPerc) then FOnDestinationReachedPerc(   );
          end;
        end;
@@ -2500,19 +2621,19 @@ begin
      end
      else begin
 
-       FMoverData.TWPinterval := FMoverData.TWPinterval - interval;
-       if FMoverData.TWPinterval <= 0 then begin
+       FMoverData.MoveModePath_TWPinterval := FMoverData.MoveModePath_TWPinterval - interval;
+       if FMoverData.MoveModePath_TWPinterval <= 0 then begin
 
-         FMoverData.TWPinterval := FMoverData.WPinterval;
-         FMoverData.curWP := FMoverData.curWP + Round(FMoverData.Speed) ;  // posso andare oltre. per qusto sotto devo fixare
+         FMoverData.MoveModePath_TWPinterval := FMoverData.MoveModePath_WPinterval;
+         FMoverData.MoveModePath_curWP := FMoverData.MoveModePath_curWP + Round(FMoverData.Speed) ;  // posso andare oltre. per qusto sotto devo fixare
 
-         if FMoverData.curWP <= FMoverData.MovePath.Count-1 then begin
-           PositionX := FMoverData.MovePath[FMoverData.curWP].X;
-           PositionY := FMoverData.MovePath[FMoverData.curWP].Y;
+         if FMoverData.MoveModePath_curWP <= FMoverData.MoveModePath_MovePath.Count-1 then begin
+           PositionX := FMoverData.MoveModePath_MovePath[FMoverData.MoveModePath_curWP].X;
+           PositionY := FMoverData.MoveModePath_MovePath[FMoverData.MoveModePath_curWP].Y;
          end
          else begin
-           FMoverData.UseMovePath := False;
-           FMoverData.curWP := 0;//FMoverData.MovePath.Count-1;
+           FMoverData.MoveMode := Normal;
+           FMoverData.MoveModePath_curWP := 0;//FMoverData.MovePath.Count-1;
            if NotifyDestinationReached  then
              if Assigned( FOnDestinationReached ) then FOnDestinationReached(  ); // <--- arriva su chi ha fatto l'override
          end;
@@ -2536,9 +2657,8 @@ begin
 
     oldx :=  PositionX;
     oldy :=  PositionY;
-//    if Guid = 'ball' then begin
-//    OutputDebugString(PChar('ball ' +  FloatToStr(PositionX) + '  ' +  FloatToStr(PositionY) +'  ' +  FloatToStr(FMoverData.Speed)));
-//    end;
+
+  if FMoverData.MoveMode = Normal then begin // normal, not thrust or Path
     (*************************************************************************)
     (*                              X                                        *)
     (*************************************************************************)
@@ -2581,7 +2701,7 @@ begin
     if FMoverData.lstPartial.Count > 0 then begin
       dist := AbsDistance( FMoverData.fStartX, FMoverData.fStartY,Position.X,Position.Y);  // quanti pixel ho percorso
       for I := FMoverData.lstPartial.Count -1 downto 0 do begin
-        dist2 := FMoverData.TotalStep *  StrToInt(FMoverData.lstPartial[i]) div 100;       // quanti pixel devo fare per la prossima percentuale
+        dist2 := FMoverData.MoveModePath_TotalStep *  StrToInt(FMoverData.lstPartial[i]) div 100;       // quanti pixel devo fare per la prossima percentuale
         if dist >= dist2  then begin
           FMoverData.Partial := StrToInt(FMoverData.lstPartial[i]);
           FMoverData.lstPartial.Delete(I);
@@ -2590,7 +2710,49 @@ begin
       end;
     end;
     ReleaseMutex(MutexMove);
-
+  end
+  else if FMoverData.MoveMode = Thrust then begin
+    if FMoverData.MoveModeThrust_Thrust > 0 then begin
+      VectorX := FMoverData.MoveModeThrust_Thrust * Cos( Trunc( FixAngle( Angle ) ) * PI / 180 );
+      VectorY := FMoverData.MoveModeThrust_Thrust * Sin( Trunc( FixAngle( Angle ) ) * PI / 180 );
+      FMoverData.SpeedX := FMoverData.SpeedX + VectorX;
+      FMoverData.SpeedY := FMoverData.SpeedY + VectorY;
+    end;
+    if (FMoverData.MoveModeThrust_Friction > 0) and (FMoverData.MoveModeThrust_Thrust <= 0) then begin
+      if FMoverData.SpeedX > 0 then  begin
+        FMoverData.SpeedX := FMoverData.SpeedX - FMoverData.MoveModeThrust_Friction;
+        if FMoverData.SpeedX < 0 then
+          FMoverData.SpeedX := 0;
+      end;
+      if FMoverData.SpeedX < 0 then begin
+        FMoverData.SpeedX := FMoverData.SpeedX + FMoverData.MoveModeThrust_Friction;
+        if FMoverData.SpeedX > 0 then
+          FMoverData.SpeedX := 0;
+      end;
+      if FMoverData.SpeedY > 0 then begin
+        FMoverData.SpeedY := FMoverData.SpeedY - FMoverData.MoveModeThrust_Friction;
+        if FMoverData.SpeedY < 0 then
+          FMoverData.SpeedY := 0;
+      end;
+      if FMoverData.SpeedY < 0 then begin
+        FMoverData.SpeedY := FMoverData.SpeedY + FMoverData.MoveModeThrust_Friction;
+        if FMoverData.SpeedY > 0 then
+          FMoverData.SpeedY := 0;
+      end;
+    end;
+    if FMoverData.SpeedX > FMoverData.MoveModeThrust_MaximumSpeed then
+      FMoverData.SpeedX := FMoverData.MoveModeThrust_MaximumSpeed;
+    if FMoverData.SpeedY > FMoverData.MoveModeThrust_MaximumSpeed then
+      FMoverData.SpeedY := FMoverData.MoveModeThrust_MaximumSpeed;
+    if FMoverData.SpeedX < -FMoverData.MoveModeThrust_MaximumSpeed then
+      FMoverData.SpeedX := -FMoverData.MoveModeThrust_MaximumSpeed;
+    if FMoverData.SpeedY < -FMoverData.MoveModeThrust_MaximumSpeed then
+      FMoverData.SpeedY := -FMoverData.MoveModeThrust_MaximumSpeed;
+    if FMoverData.SpeedX <> 0 then
+      PositionX := PositionX + FMoverData.SpeedX;
+    if FMoverData.SpeedY <> 0 then
+      PositionY := PositionY + FMoverData.SpeedY;
+  end;
 
     if ( PositionX = FMoverData.fDestinationX ) and ( PositionY = FMoverData.fDestinationY ) then begin
   //          if Not NotifyDestinationReached then Exit;
@@ -2598,19 +2760,38 @@ begin
 
     end;
 
-   if fengine.FIsoPriority then Priority:= Position.Y + ModPriority;
+  if fengine.FIsoPriority then Priority:= Position.Y + ModPriority;
+
+  if fengine.Theater.WrapHorizontal then
+  begin
+    while PositionX < 0 do
+      PositionX := PositionX + fengine.Theater.VirtualWidth;
+    while PositionX > fengine.Theater.VirtualWidth do
+      PositionX := PositionX - fengine.Theater.VirtualWidth;
+  end;
+  if fengine.Theater.WrapVertical then
+  begin
+    while PositionY < 0 do
+      PositionY := PositionY + fengine.Theater.VirtualHeight;
+    while PositionY > fengine.Theater.VirtualHeight do
+      PositionY := PositionY - fengine.Theater.VirtualHeight;
+  end;
 
 end;
 
 
 procedure SE_Sprite.SetAngle(const Value: single);
+var
+  a: single;
 begin
-  FAngle := -Value+90;    // <-- dipende da come è girato lo sprite in partenza
-  //while a < 0 do
-  //  a := a + 360;
-  //while a >= 360 do
-  //  a := a - 360;
- // FAngle := a;
+//  FAngle := -Value+90;    // <-- dipende da come è girato lo sprite in partenza
+  a := Value;
+  while a < 0 do
+    a := a + 360;
+  while a >= 360 do
+    a := a - 360;
+  FAngle := a;
+
 end;
 procedure SE_Sprite.SetTransparent(const Value: boolean);
 begin
@@ -2645,28 +2826,50 @@ procedure SE_Sprite.DeleteSubSprite ( Guid : string);
 var
   i: Integer;
 begin
-  for I := lstSubSprites.Count -1 downto 0  do begin
+  for I :=  0 to lstSubSprites.Count -1 do begin
     if lstSubSprites[i].Guid = Guid then begin
       lstSubSprites[i].dead := true;
       lstSubSprites.Delete(i);
       Exit;
     end;
   end;
+  Engine.ProcessSprites(0);
 end;
-procedure SE_Sprite.AddSubSprite ( const FileName, Guid: string; posX, posY: integer; const TransparentSprite: boolean);
+function SE_Sprite.AddSubSprite ( const FileName, Guid: string; posX, posY: integer; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite;
 var
   aSubSprite : SE_SubSprite;
 begin
-  aSubSprite := SE_SubSprite.create( FileName, Guid, PosX, PosY, True,TransparentSprite );
+  aSubSprite := SE_SubSprite.create( FileName, Guid, PosX, PosY, True,TransparentSprite ,priority,lifespan);
   lstSubSprites.Add( aSubSprite );
+  lstSubSprites.sort(TComparer<SE_SubSprite>.Construct(
+  function (const L, R: SE_SubSprite): integer
+  begin
+    Result := L.lPriority - R.lPriority;
+  end
+ ));
+  Engine.ProcessSprites(0);
 end;
-
-procedure SE_Sprite.AddSubSprite ( const bmp: SE_Bitmap; Guid: string; posX, posY: integer; const TransparentSprite: boolean);
+function SE_Sprite.AddSubSpriteCentered ( const FileName, Guid: string; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite;
+begin
+  AddSubSprite( FileName, Guid, FrameWidth div 2 - bmp.Width div 2 , FrameHeight div 2 -  bmp.Height div 2,  TransparentSprite, priority,lifespan  );
+end;
+function SE_Sprite.AddSubSprite ( const bmp: SE_Bitmap; Guid: string; posX, posY: integer; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite;
 var
   aSubSprite : SE_SubSprite;
 begin
-  aSubSprite := SE_SubSprite.create( bmp, Guid, PosX, PosY, True,TransparentSprite );
+  aSubSprite := SE_SubSprite.create( bmp, Guid, PosX, PosY, True,TransparentSprite,priority,lifespan );
   lstSubSprites.Add( aSubSprite );
+  lstSubSprites.sort(TComparer<SE_SubSprite>.Construct(
+  function (const L, R: SE_SubSprite): integer
+  begin
+    Result := L.lPriority - R.lPriority;
+  end
+ ));
+  Engine.ProcessSprites(0);
+end;
+function SE_Sprite.AddSubSpriteCentered ( const bmp: SE_Bitmap; Guid: string; const TransparentSprite: boolean; priority,lifespan: integer):SE_SubSprite;
+begin
+  AddSubSprite( Bmp, Guid, FrameWidth div 2 - bmp.Width div 2 , FrameHeight div 2 -  bmp.Height div 2 ,  TransparentSprite, priority,lifespan  );
 end;
 
 procedure SE_Sprite.RemoveAllSubSprites ;
@@ -2677,6 +2880,7 @@ begin
     lstSubSprites[i].dead := true;
     lstSubSprites.Delete(i);
   end;
+  Engine.ProcessSprites(0);
 end;
 
 function SE_Sprite.CollisionDetect(aSprite: SE_sprite): Boolean;
@@ -2825,12 +3029,10 @@ end;
 procedure SE_Sprite.SetPriority(const Value: integer);
 begin
   FPriority := Value;
-  Engine.FSortNeeded := True;
 end;
 procedure SE_Sprite.SetModPriority(const Value: integer);
 begin
   FModPriority := Value;
-  Engine.FSortNeeded := True;
 end;
 
 procedure SE_Sprite.SetFrameXmin (const Value: Integer);
@@ -2923,7 +3125,8 @@ var
 begin
     with rectSource do begin
       Left := FrameX * BMP.Width div FramesX;
-      Top := (FrameY-1) * BMP.Height div FramesY;
+//      Top := (FrameY-1) * BMP.Height div FramesY;
+      Top := (FrameY) * BMP.Height div FramesY;
       Right := (Left + BMP.Width div FramesX)-1;
       Bottom :=( Top + BMP.Height div FramesY)-1;
     end;
@@ -2963,19 +3166,20 @@ begin
     fBmpCurrentFrameAlpha.Flip(fliph)
   end;
   if fAngle <> 0 then begin
-    fBmpCurrentFrame.Rotate (fAngle);
+    fBmpCurrentFrame.Rotate (-fAngle);
    if Alpha <> 0 then
-    fBmpCurrentFrameAlpha.Rotate (fAngle);
+    fBmpCurrentFrameAlpha.Rotate (-fAngle);
   end;
-  if Scale <> 0 then begin
-    NewWidth:= trunc (( fBmpCurrentFrame.Width * Scale ) / 100);
-    NewHeight:= trunc (( fBmpCurrentFrame.Height * Scale ) / 100);
-    if (NewWidth > 0) and (newheight > 0) then begin
-      fBmpCurrentFrame.Stretch(NewWidth,NewHeight);
-      if Alpha <> 0 then
-      fBmpCurrentFrameAlpha.Stretch(NewWidth,NewHeight);
+
+  if SpriteFileName = 'TPolygon'  then begin
+    if  SE_SpritePolygon(Self).oldAngle <> fAngle then begin
+      SE_SpritePolygon(Self).Rotate(Trunc(fAngle) );
+      SE_SpritePolygon(Self).oldAngle := fAngle;
     end;
+
   end;
+
+  // qui Scale
   //if fGrayscaled then fBmpCurrentFrame.GrayScale ;
 
 
@@ -2992,10 +3196,7 @@ begin
 end;
 procedure SE_Sprite.Render ( RenderTo: TRenderBitmap );
 var
-
   i,y,X: integer;
-
-
   wTrans: dword;
   aTrgb: Trgb;
   diff,textwidth,diffx,diffy,TextHeight: Integer;
@@ -3004,13 +3205,9 @@ var
   R :Trect;
 begin
 
-    
-
-    if RenderTo = VisibleRender then
-      DestBitmap:= Theater.VisibleBitmap else
-        DestBitmap := Theater.fvirtualBitmap;
-
-
+  if RenderTo = VisibleRender then
+    DestBitmap:= Theater.VisibleBitmap else
+      DestBitmap := Theater.fvirtualBitmap;
 
   X:= DrawingRect.Left ;
   Y:= DrawingRect.top;
@@ -3019,6 +3216,7 @@ begin
    for I := 0 to lstSubSprites.Count -1 do begin
       if lstSubSprites.Items [i].LifeSpan > 0 then  begin
         lstSubSprites.Items [i].LifeSpan := lstSubSprites.Items [i].LifeSpan -  FTheater.thrdAnimate.Interval ;
+   //     lstSubSprites.Items[i].lBmp.Canvas.TextOut(0,0,IntToStr(lstSubSprites.Items [i].LifeSpan));
         if lstSubSprites.Items [i].LifeSpan <= 0 then begin
            lstSubSprites.Items [i].Dead := true;
         end;
@@ -3030,6 +3228,7 @@ begin
                               lstSubSprites [i].lx,lstSubSprites [i].ly,
                               lstSubSprites [i].lBmp.Width , lstSubSprites [i].lBmp.Height ,
                               lstSubSprites [i].ltransparent, lstSubSprites [i].lBmp.Bitmap.Canvas.Pixels [0,0]);
+      //  lstSubSprites.Items[i].lBmp.Canvas.TextOut(0,0,IntToStr(lstSubSprites.Items [i].LifeSpan));
     end;
    end;
   // fine gestione subsprites
@@ -3053,6 +3252,7 @@ begin
       fBMPCurrentFrame.Canvas.Font.Size := lstLabels.Items[i].lFontSize;
       fBMPCurrentFrame.Canvas.Font.Style := lstLabels.Items[i].lFontStyle;
       fBMPCurrentFrame.Canvas.Font.Quality := lstLabels.Items[i].lFontQuality;
+
   //      fBMPCurrentFrame.Canvas.Brush.Style := lstLabels.Items[i].lBrushStyle;// bsClear;
 
 //      if lstLabels.Items[i].lTransparent <> 1 then begin
@@ -3071,13 +3271,13 @@ begin
       SetBkMode(fBMPCurrentFrame.Canvas.Handle,lstLabels.Items[i].lTransparent ); // 1= transparent ,2= OPAQUE
 
 
-      if lstLabels.Items[i].lAlignment = 5 then begin // 5 è il mio centro speciale
+      if lstLabels.Items[i].lAlignment = dt_XCenter then begin // 5 è il mio centro speciale
         textWidth := fBMPCurrentFrame.Canvas.TextWidth(lstLabels.Items[i].lText);
         R.Left := R.Left - (textWidth div 2);
         R.Width := textwidth;
         DrawText(fBMPCurrentFrame.Canvas.handle, PChar(lstLabels.Items[i].lText), length(lstLabels.Items[i].lText), R, dt_wordbreak or dt_Center  );
       end
-      else if lstLabels.Items[i].lAlignment = 7 then begin // 7 a X a destra
+      else if lstLabels.Items[i].lAlignment = dt_XRight then begin // 7 a X a destra
         textWidth := fBMPCurrentFrame.Canvas.TextWidth(lstLabels.Items[i].lText);
         R.Left := R.Left - textWidth;
         R.Width := textwidth;
@@ -3120,7 +3320,27 @@ begin
       else // left, right ,center normali
         DrawText(fBMPCurrentFrame.Canvas.handle, PChar(SE_SpriteProgressBar(Self).text), length(SE_SpriteProgressBar(Self).Text), R, SE_SpriteProgressBar(Self).pbHAlignment or SE_SpriteProgressBar(Self).pbVAlignment );
 
+  end
+  else if SpriteFileName = 'TPolygon'  then begin
+    fBMPCurrentFrame.Canvas.Pen.Color := SE_SpritePolygon(Self).VertexColor;
+    fBMPCurrentFrame.Canvas.Brush.Color := SE_SpritePolygon(Self).FillColor;
+
+    if SE_SpritePolygon(Self).Filled then begin
+      fBMPCurrentFrame.Canvas.Brush.Style := bsSolid;
+      fBMPCurrentFrame.Canvas.Polygon(SE_SpritePolygon(Self).arPointVisual);
+    end
+    else begin
+      fBMPCurrentFrame.Canvas.MoveTo(SE_SpritePolygon(Self).arPoint[0].X + (fBMPCurrentFrame.Width div 2),SE_SpritePolygon(Self).arPoint[0].Y + (fBMPCurrentFrame.Height div 2));
+      for I := 1 to High(SE_SpritePolygon(Self).arPoint) do begin
+        fBMPCurrentFrame.Canvas.LineTo(SE_SpritePolygon(Self).arPoint[i].X + (fBMPCurrentFrame.Width div 2),SE_SpritePolygon(Self).arPoint[i].Y + (fBMPCurrentFrame.Height div 2));
+      end;
+      fBMPCurrentFrame.Canvas.LineTo(SE_SpritePolygon(Self).arPoint[0].X + (fBMPCurrentFrame.Width div 2),SE_SpritePolygon(Self).arPoint[0].Y + (fBMPCurrentFrame.Height div 2));
+    end;
+    //Transparent := False;
+    fTransparentForced := True;
+    wTrans := clwhite;
   end;
+
 
   if Transparent then begin
 
@@ -3146,6 +3366,7 @@ begin
   if fGrayscaled then fBmpCurrentFrame.GrayScale ;
 
    fBmpCurrentFrame.fbitmapAlpha := FBMPCurrentFrameAlpha.Bitmap ;
+   //fBmpCurrentFrame.Canvas.TextOut(2,0,IntToStr(LifeSpan));
    fBmpCurrentFrame.CopyRectTo( DestBitmap,0,0,X,Y,fBmpCurrentFrame.Width+1, fBmpCurrentFrame.height+1,Transparent,wtrans ) ;
 
 
@@ -3242,7 +3463,157 @@ destructor SE_SpriteProgressBar.Destroy; //--> distrugge la spriteLabel, poi inh
 begin
   inherited;
 end;
+constructor SE_SpritePolygon.create ( const guid: string; x,y, vertexColor,FillColor: integer; Vertices: string; Filled: boolean; Priority: integer );
+var
+  aPoint : TPoint;
+  ts : TStringList;
+  i: Integer;
+  rectSource,aRect : TRect;
+begin
 
+  ts := TStringList.Create;
+  ts.CommaText := Vertices;
+
+  SetLength( arPoint, ts.Count );
+  SetLength( arPointOriginal, ts.Count );
+  SetLength( arPointVisual, ts.Count );
+  for I := Low ( arPoint) to High( arPoint)  do begin
+    aPoint.X :=  StrToInt( ExtractWordL  ( 1,ts[i],'.' ));
+    aPoint.Y :=  StrToInt( ExtractWordL  ( 2,ts[i],'.' ));
+    arPoint[i] := Point(aPoint.X,aPoint.Y  );
+    arPointOriginal[i]:= Point(aPoint.X,aPoint.Y  );
+  end;
+  ARect := GetSizeFromPolygon;
+  if ARect.Width = 0 then
+    ARect.Width := 1;
+  if ARect.height = 0 then
+    ARect.height := 1;
+
+  for I := Low ( arPoint) to High( arPoint)  do begin
+    arPointVisual[i]:= Point(arPoint[i].X + aRect.Width div 2,arPoint[i].Y + aRect.Height div 2);
+  end;
+
+  Polygon := True;
+  Self.VertexColor := VertexColor;
+  Self.FillColor := FillColor;
+  Self.Filled := Filled;
+
+
+  Destinationreached := true;
+  FAnimated := false ;
+  Self.Guid:= Guid;
+  FMoverData:= SE_SpriteMoverData.Create;
+  FMoverData.FSprite := self;
+  FPositionX:= X;
+  FPositionY:= Y;
+  //FMoverData.Destination := Point(X,Y);
+  fpause    :=false;
+
+  FramesX  := 1;
+  FramesY  := 1;
+  FrameXMin  := 0;
+  FrameXMax  := 0;
+  FAnimationInterval := 1000;
+  fDelay:=0;
+
+
+  FBMP:= SE_Bitmap.Create( aRect.Width , aRect.Height );
+//  FBMP.Canvas.Brush.Style := bsSolid;
+//  FBMP.Canvas.Brush.Color := Barcolor;
+  FBMP.Canvas.FillRect( Rect(0,0,aRect.Width , aRect.Height) );
+  //  FBMP.Assign(bmp);
+  inherited create ( FBMP.Bitmap, guid, 1,1,1000,x,y, true) ;
+  SpriteFileName:= 'TPolygon';
+
+
+  FBMPCurrentFrame:=SE_Bitmap.Create (FBMP.Width div FramesX , FBMP.height div FramesY );
+
+  FBMPalpha :=  SE_Bitmap.Create(FBMP.Width,FBMP.Height);   // crea un bmp alpha comunque
+  FBMPCurrentFramealpha :=  SE_Bitmap.Create(FBMPCurrentFrame.Width,FBMPCurrentFrame.Height);   // crea un bmp alpha comunque
+
+  fBmp.fbitmapAlpha := FBMPalpha.Bitmap ;
+  fBmpCurrentFrame.fbitmapAlpha := FBMPCurrentFrameAlpha.Bitmap ;
+
+  //glielo devo passare già tagliato e poi andrà bene
+    with rectSource do begin
+      Left := 0;
+      Top := 0;
+      Right := ( FBMP.Width div FramesX)-1;
+      Bottom :=( FBMP.Height div FramesY)-1;
+    end;
+
+
+  FBMPCurrentFrame.Bitmap.PixelFormat :=  pf24bit;
+
+  FBMP.CopyRectTo(fBMPCurrentFrame,RectSource.left,RectSource.top,0,0,RectSource.Width+1,RectSource.Height+1,false  , 0 ) ;  //irargb
+
+  FFrameWidth := FBMPCurrentFrame.Width;
+  FFrameHeight := FBMPCurrentFrame.height;
+
+  FOnDestinationReached := iOnDestinationReached ;
+  FOnDestinationReachedPerc := iOnDestinationReachedPerc ;
+  FOnPartialMoveReached := iOnPartialMoveReached ;
+
+
+  Transparent := true;
+
+
+
+end;
+destructor SE_SpritePolygon.destroy;
+begin
+
+  inherited;
+end;
+function SE_SpritePolygon.GetSizeFromPolygon: TRect;
+var
+  i: integer;
+begin
+
+  Result.Left := High( integer );
+  Result.Right := Low( integer );
+  Result.Top := High( integer );
+  Result.Bottom := Low( integer );
+  for i := Low (arPoint) to High (arPoint) do  begin
+    if arPoint[i].X < Result.Left then
+      Result.Left := arPoint[i].X;
+    if arPoint[i].Y < Result.Top then
+      Result.Top := arPoint[i].Y;
+    if arPoint[i].X > Result.Right then
+      Result.Right := arPoint[i].X;
+    if arPoint[i].Y > Result.Bottom then
+      Result.Bottom := arPoint[i].Y;
+  end;
+
+//  Result.Width := Result.Width + 1;
+//  Result.Height:= Result.Height + 1;
+
+
+
+end;
+procedure SE_SpritePolygon.Rotate(Degrees: integer);
+var
+  xSin, xCos: single;
+  i: integer;
+  x, y: integer;
+begin
+  xSin := arSin[Degrees];
+  xCos := arCos[Degrees];
+
+  for i := Low (arPoint) to High (arPoint) do  begin
+    arPoint[i] := arPointOriginal[i];
+  end;
+
+  for i := Low (arPoint) to High (arPoint) do  begin
+    x := Round( arPoint[i].X * xCos - arPoint[i].Y * xSin );
+    y := Round( arPoint[i].Y * xCos + arPoint[i].X * xSin );
+    arPoint[i] := Point( x, y );
+  end;
+  for i := Low (arPoint) to High (arPoint) do  begin
+    arPointVisual[i]:= Point(arPoint[i].X + FBMPCurrentFrame.Width div 2,arPoint[i].Y + FBMPCurrentFrame.Height div 2);
+  end;
+
+end;
 
 constructor SE_Theater.Create(Owner: TComponent);
 begin
@@ -3394,6 +3765,14 @@ begin
   Update;
 end;
 
+procedure SE_Theater.SetWrapHorizontal(const v: boolean);
+begin
+  fWrapHorizontal := v;
+end;
+procedure SE_Theater.SetWrapVertical(const v: boolean);
+begin
+  fWrapVertical := v;
+end;
 
 procedure SE_Theater.SetVirtualWidth(const v: integer);
 begin
@@ -3783,7 +4162,6 @@ begin
       VisibleBitmap.Canvas.Font.Assign( self.Font );
       VisibleBitmap.Canvas.TextOut( 25, 4, 'Demo version' ) ;
     {$ENDIF NAGSCREEN }
-
    // qui copia da fVisibleBitmap al canvas
   //        DIB_SectionHandle: HBITMAP;
     BitBlt(Canvas.Handle, 0, 0, Width, Height, fVisibleBitmap.Canvas.Handle, 0, 0, SRCCOPY);
@@ -3854,7 +4232,7 @@ begin
     end;
     for s := 0 to lstEngines[i].lstSprites.Count - 1 do begin  // da 0 in su per la priority. precedenza a priority più alta
       spr := lstEngines[i].Sprites[s];
-      if spr.Visible then begin
+      if (spr.Visible)  or (  not (spr.Visible) and (lstEngines[i].HiddenSpritesMouseClick) )then begin
         if spr.DrawingRect.Contains ( pt ) then begin
           bmpX:= spr.DrawingRect.Right  - pt.X    ; // <--- sul virtualBitmap
           bmpX:= spr.DrawingRect.Width - bmpX;
@@ -4060,7 +4438,7 @@ begin
       end;
       for s := 0 to lstEngines[i].lstSprites.Count - 1 do begin // da 0 in su per la priority. precedenza a priority più alta. downto solo nel render
         spr := lstEngines[i].Sprites[s];
-        if spr.Visible then begin
+        if (spr.Visible)  or (  not (spr.Visible) and (lstEngines[i].HiddenSpritesMouseClick) )then begin
           if spr.DrawingRect.Contains ( pt ) then begin
             bmpX:= spr.DrawingRect.Right  - pt.X    ; // <--- sul virtualBitmap
             bmpX:= spr.DrawingRect.Width - bmpX;
@@ -4158,7 +4536,6 @@ begin
   aBitmap.Canvas.FillRect(rect(0, 0, Width , Height ));
 
 // Questo è il render finale
-  {$ifdef angle}
   //Angle:= 45;
   if Angle <> 0 then begin
     Rotated := fVirtualBitmap.Rotate(Angle);
@@ -4167,7 +4544,6 @@ begin
     freeandnil(Rotated);
     Exit;
   end;
-  {$endif angle}
 
   fVirtualBitmap.InternalRender(ABitmap, ABitmapScanline,
   fOffsetX, fOffsetY, fDstX, fDstY, VirtualSource1x, VirtualSource1y, VirtualSourceWidth, VirtualSourceHeight);
@@ -4176,6 +4552,10 @@ end;
 
 initialization
   MutexMove:=CreateMutex(nil,false,'move');
+  for i := 0 to 360 do begin
+    arSin[i] := Sin( DegToRad( i ) );
+    arCos[i] := Cos( DegToRad( i ) );
+  end;
 finalization
   CloseHandle(MutexMove)
 

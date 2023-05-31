@@ -39,6 +39,8 @@ object Form1: TForm1
     CollisionDelay = 0
     ShowPerformance = False
     OnBeforeVisibleRender = SE_Theater1BeforeVisibleRender
+    WrapHorizontal = False
+    WrapVertical = False
     VirtualWidth = 1200
     Virtualheight = 1920
     TabOrder = 0
@@ -152,6 +154,7 @@ object Form1: TForm1
     ClickSprites = False
     PixelCollision = False
     HiddenSpritesMouseMove = False
+    HiddenSpritesMouseClick = False
     IsoPriority = False
     Priority = 0
     Theater = SE_Theater1
@@ -161,6 +164,7 @@ object Form1: TForm1
   object SE_Characters: SE_Engine
     PixelCollision = False
     HiddenSpritesMouseMove = False
+    HiddenSpritesMouseClick = False
     IsoPriority = True
     Priority = 1
     Theater = SE_Theater1
